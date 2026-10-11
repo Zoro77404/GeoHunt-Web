@@ -1,0 +1,2 @@
+# Serve the build files byte-for-byte (no line-ending changes)
+* -text
