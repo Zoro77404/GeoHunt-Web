@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#F6DDB0">
+  <title>Geo Hunt — GPS test</title>
+  <link rel="icon" type="image/svg+xml" href="TemplateData/pin.svg">
+  <style>
+    @font-face { font-family: "Fredoka"; src: url("TemplateData/Fredoka-Bold.ttf"); font-weight: 700; }
+    :root { --bg: #F6DDB0; --card: #FFFDF8; --ink: #3B3247; --muted: #7B7088; --ok: #3FA66B; --warn: #E08A2E; --bad: #D64561; --line: #EADCC4; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom)); }
+    main { max-width: 560px; margin: 0 auto; }
+    h1 { font-family: "Fredoka", sans-serif; font-size: 26px; margin: 4px 0 2px; }
+    .sub { color: var(--muted); margin: 0 0 14px; }
+    .card { background: var(--card); border-radius: 18px; padding: 14px 16px; margin-bottom: 12px; box-shadow: 0 4px 0 rgba(0,0,0,.06); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+    .k { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+    .v { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; word-break: break-all; }
+    .v.small { font-size: 15px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; }
+    button { font: 700 16px "Fredoka", sans-serif; border: 0; border-radius: 14px; padding: 12px 16px; color: #fff; background: #5B8DEF; box-shadow: 0 4px 0 #3E6BC4; flex: 1 1 auto; }
+    button:active { transform: translateY(2px); box-shadow: 0 2px 0 #3E6BC4; }
+    button.alt { background: #9A8FA8; box-shadow: 0 4px 0 #776C86; }
+    button.go { background: var(--ok); box-shadow: 0 4px 0 #2C7A4E; font-size: 19px; padding: 16px; }
+    #state { font-weight: 700; }
+    .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+    #help { display: none; border-left: 5px solid var(--warn); }
+    canvas { width: 100%; height: 240px; display: block; background: #F3EEE4; border-radius: 12px; }
+    #log { font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; max-height: 260px; overflow: auto; white-space: pre; margin: 0; }
+    #toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 12px; opacity: 0; transition: opacity .25s; pointer-events: none; }
+    #toast.show { opacity: 1; }
+    a { color: #3E6BC4; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>GPS test</h1>
+  <p class="sub">Raw readings from this phone's browser, no game in between. Start, then walk. <a href="./">Open the game</a></p>
+
+  <div class="card">
+    <div class="row"><button class="go" id="start">Start GPS</button></div>
+    <p style="margin:10px 0 0">State: <span id="state">not started</span></p>
+    <p style="margin:2px 0 0" class="sub" id="perm"></p>
+  </div>
+
+  <div class="card" id="help"></div>
+
+  <div class="card grid">
+    <div><div class="k">Latitude</div><div class="v small" id="lat">–</div></div>
+    <div><div class="k">Longitude</div><div class="v small" id="lon">–</div></div>
+    <div><div class="k">Accuracy</div><div class="v" id="acc">–</div></div>
+    <div><div class="k">Updates</div><div class="v" id="count">0</div></div>
+    <div><div class="k">Seconds since last</div><div class="v" id="since">–</div></div>
+    <div><div class="k">Between updates</div><div class="v" id="gap">–</div></div>
+    <div><div class="k">Distance walked</div><div class="v" id="dist">0 m</div></div>
+    <div><div class="k">From start (straight)</div><div class="v" id="straight">0 m</div></div>
+    <div><div class="k">Speed</div><div class="v small" id="speed">–</div></div>
+    <div><div class="k">Restarts · errors</div><div class="v small" id="errs">0 · 0</div></div>
+  </div>
+
+  <div class="card">
+    <div class="k" style="margin-bottom:6px">Path (blue = every update, circle = accuracy of the last one)</div>
+    <canvas id="map"></canvas>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:10px">
+      <button id="copy">Copy log</button>
+      <button class="alt" id="reset">Reset distance</button>
+    </div>
+    <pre id="log"></pre>
+  </div>
+</main>
+<div id="toast"></div>
+
+<script>
+(function () {
+  "use strict";
+  // Same settings as the game: high accuracy, no cached positions, 10 s timeout, restart on any error and when the page
+  // comes back to the front, and a direct request when nothing arrived for a few seconds.
+  var TIMEOUT_MS = 10000, BACKUP_AFTER_MS = 4000;
+  var $ = function (id) { return document.getElementById(id); };
+  var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+  var watchId = null, started = false, count = 0, errors = 0, restarts = 0;
+  var lastAt = 0, lastPollAt = 0, lastFix = null, startFix = null, dist = 0, gaps = [], log = [], track = [], pollBusy = false;
+
+  function meters(a, b) {
+    var R = 6371000, r = Math.PI / 180;
+    var dLat = (b.lat - a.lat) * r, dLon = (b.lon - a.lon) * r;
+    var h = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+  function time() { var d = new Date(); return d.toTimeString().slice(0, 8) + "." + String(d.getMilliseconds()).padStart(3, "0"); }
+  function addLog(line) {
+    log.push(time() + "  " + line);
+    if (log.length > 300) log.shift();
+    $("log").textContent = log.slice(-60).reverse().join("\n");
+  }
+  function setState(text, cls) { $("state").textContent = text; $("state").className = cls || ""; }
+  function toast(text) { var t = $("toast"); t.textContent = text; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(function () { t.classList.remove("show"); }, 1800); }
+
+  function showHelp(kind) {
+    var h = $("help");
+    if (!kind) { h.style.display = "none"; return; }
+    var steps;
+    if (kind === "denied") {
+      steps = isIOS
+        ? "<b>Location is blocked.</b><br>iPhone: Settings &gt; Privacy &amp; Security &gt; Location Services &gt; Safari Websites &gt; <b>While Using the App</b>, and turn <b>Precise Location</b> on. Then reload this page."
+        : "<b>Location is blocked.</b><br>Android: tap the icon left of the address bar &gt; Permissions &gt; Location &gt; <b>Allow</b>. Also check Settings &gt; Location is on and Chrome is allowed. Then reload this page.";
+    } else {
+      steps = isIOS
+        ? "<b>Accuracy is very rough.</b> Turn on Precise Location: Settings &gt; Privacy &amp; Security &gt; Location Services &gt; Safari Websites &gt; <b>Precise Location</b> on."
+        : "<b>Accuracy is very rough.</b> Turn on Settings &gt; Location &gt; <b>Google Location Accuracy</b> (or Precise location for Chrome).";
+    }
+    h.innerHTML = steps;
+    h.style.display = "block";
+  }
+
+  function onFix(p, source) {
+    var c = p.coords, fix = { lat: c.latitude, lon: c.longitude, acc: c.accuracy || 0, ts: p.timestamp || Date.now(), at: performance.now() };
+    if (lastFix && fix.ts === lastFix.ts && fix.lat === lastFix.lat && fix.lon === lastFix.lon) { addLog(source + " same fix again"); return; }
+    count++;
+    var gap = lastAt ? (fix.at - lastAt) / 1000 : 0;
+    if (lastAt) { gaps.push(gap); if (gaps.length > 20) gaps.shift(); }
+    var step = lastFix ? meters(lastFix, fix) : 0;
+    if (lastFix) dist += step;
+    if (!startFix) startFix = fix;
+    lastFix = fix; lastAt = fix.at;
+    track.push(fix); if (track.length > 600) track.shift();
+
+    $("lat").textContent = fix.lat.toFixed(6);
+    $("lon").textContent = fix.lon.toFixed(6);
+    $("acc").textContent = Math.round(fix.acc) + " m";
+    $("acc").className = "v " + (fix.acc <= 20 ? "ok" : fix.acc <= 100 ? "warn" : "bad");
+    $("count").textContent = count;
+    if (gaps.length) {
+      var avg = gaps.reduce(function (a, b) { return a + b; }, 0) / gaps.length;
+      $("gap").textContent = gap.toFixed(1) + " s (avg " + avg.toFixed(1) + ")";
+    }
+    $("dist").textContent = Math.round(dist) + " m";
+    $("straight").textContent = Math.round(meters(startFix, fix)) + " m";
+    var sp = c.speed;
+    $("speed").textContent = (sp === null || sp === undefined || isNaN(sp)) ? (gap > 0 ? (step / gap).toFixed(1) + " m/s (calc)" : "–") : sp.toFixed(1) + " m/s";
+    setState("updates coming in", "ok");
+    showHelp(fix.acc > 500 ? "rough" : null);
+    addLog(source.padEnd(5) + " " + fix.lat.toFixed(6) + ", " + fix.lon.toFixed(6) + "  ±" + Math.round(fix.acc) + " m  step " + step.toFixed(1) + " m  gap " + gap.toFixed(1) + " s");
+    draw();
+  }
+
+  function onError(e, source) {
+    errors++;
+    $("errs").textContent = restarts + " · " + errors;
+    var name = e && e.code === 1 ? "PERMISSION_DENIED" : e && e.code === 2 ? "POSITION_UNAVAILABLE" : e && e.code === 3 ? "TIMEOUT" : "error";
+    addLog(source + " error " + name + (e && e.message ? " (" + e.message + ")" : ""));
+    if (e && e.code === 1) { setState("location blocked", "bad"); showHelp("denied"); stopWatch(); started = false; $("start").textContent = "Try again"; return; }
+    if (!count) setState(e && e.code === 3 ? "waiting for a first fix (timeout, retrying)" : "no signal yet, retrying", "warn");
+    if (source === "watch") setTimeout(function () { restart("after " + name); }, 1000);
+  }
+
+  function stopWatch() { if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; } }
+  function startWatch() {
+    stopWatch();
+    watchId = navigator.geolocation.watchPosition(function (p) { onFix(p, "watch"); }, function (e) { onError(e, "watch"); },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: TIMEOUT_MS });
+  }
+  function poll(reason) {
+    if (pollBusy) return;
+    pollBusy = true;
+    lastPollAt = performance.now();
+    navigator.geolocation.getCurrentPosition(function (p) { pollBusy = false; onFix(p, "poll"); },
+      function (e) { pollBusy = false; onError(e, "poll"); }, { enableHighAccuracy: true, maximumAge: 0, timeout: TIMEOUT_MS });
+  }
+  function restart(why) {
+    if (!started || document.visibilityState === "hidden") return;
+    restarts++;
+    $("errs").textContent = restarts + " · " + errors;
+    addLog("restart watch (" + why + ")");
+    startWatch();
+    poll("restart");
+  }
+
+  $("start").addEventListener("click", function () {
+    if (!("geolocation" in navigator)) { setState("this browser has no GPS", "bad"); return; }
+    if (window.isSecureContext === false) { setState("needs https", "bad"); return; }
+    started = true;
+    $("start").textContent = "Restart GPS";
+    setState("asking for location…", "warn");
+    showHelp(null);
+    if (watchId !== null) restart("button"); else { addLog("start"); startWatch(); poll("start"); }
+  });
+  $("reset").addEventListener("click", function () { dist = 0; startFix = lastFix; track = lastFix ? [lastFix] : []; gaps = []; $("dist").textContent = "0 m"; $("straight").textContent = "0 m"; draw(); });
+  $("copy").addEventListener("click", function () {
+    var text = "Geo Hunt GPS test · " + navigator.userAgent + "\nupdates " + count + " · distance " + Math.round(dist) + " m · restarts " + restarts + " · errors " + errors + "\n" + log.join("\n");
+    var done = function () { toast("Log copied"); };
+    var fallback = function () {
+      var ta = document.createElement("textarea");
+      ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.top = "0"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.focus(); ta.setSelectionRange(0, text.length);
+      var ok = false; try { ok = document.execCommand("copy"); } catch (e) {}
+      document.body.removeChild(ta);
+      if (ok) done(); else toast("Couldn't copy: long-press the log to select it");
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
+  });
+
+  document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") restart("page visible again"); else addLog("page hidden"); });
+  window.addEventListener("pageshow", function (e) { if (e.persisted) restart("page restored"); });
+
+  if (navigator.permissions && navigator.permissions.query) {
+    navigator.permissions.query({ name: "geolocation" }).then(function (r) {
+      var show = function () { $("perm").textContent = "Permission: " + (r.state === "granted" ? "allowed" : r.state === "prompt" ? "will ask" : "blocked"); };
+      show(); r.onchange = show;
+    }).catch(function () {});
+  }
+
+  setInterval(function () {
+    if (lastAt) $("since").textContent = ((performance.now() - lastAt) / 1000).toFixed(1) + " s";
+    // Nothing for a few seconds: ask directly (an iPhone watch can go quiet).
+    if (started && watchId !== null && document.visibilityState === "visible" && performance.now() - Math.max(lastAt, lastPollAt) > BACKUP_AFTER_MS) poll("quiet");
+  }, 500);
+
+  function draw() {
+    var cv = $("map"), dpr = Math.min(2, window.devicePixelRatio || 1);
+    var w = cv.clientWidth, h = cv.clientHeight;
+    cv.width = w * dpr; cv.height = h * dpr;
+    var g = cv.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, w, h);
+    if (!track.length) return;
+    var o = track[0], mLon = 111320 * Math.cos(o.lat * Math.PI / 180);
+    var pts = track.map(function (f) { return { x: (f.lon - o.lon) * mLon, y: (f.lat - o.lat) * 111320, acc: f.acc }; });
+    var minX = 0, maxX = 0, minY = 0, maxY = 0;
+    pts.forEach(function (p) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); });
+    var span = Math.max(20, maxX - minX, maxY - minY) * 1.15, s = Math.min(w, h) / span;
+    var cx = w / 2 - (minX + maxX) / 2 * s, cy = h / 2 + (minY + maxY) / 2 * s;
+    var X = function (p) { return cx + p.x * s; }, Y = function (p) { return cy - p.y * s; };
+    var last = pts[pts.length - 1];
+    g.fillStyle = "rgba(91,141,239,.12)"; g.beginPath(); g.arc(X(last), Y(last), Math.max(3, last.acc * s), 0, 7); g.fill();
+    g.strokeStyle = "#5B8DEF"; g.lineWidth = 2; g.beginPath();
+    pts.forEach(function (p, i) { if (i) g.lineTo(X(p), Y(p)); else g.moveTo(X(p), Y(p)); }); g.stroke();
+    g.fillStyle = "#3E6BC4"; pts.forEach(function (p) { g.beginPath(); g.arc(X(p), Y(p), 2.2, 0, 7); g.fill(); });
+    g.fillStyle = "#D64561"; g.beginPath(); g.arc(X(last), Y(last), 5, 0, 7); g.fill();
+    g.fillStyle = "#7B7088"; g.font = "12px sans-serif"; g.fillText(Math.round(span) + " m across", 8, h - 8);
+  }
+  window.addEventListener("resize", draw);
+})();
+</script>
+</body>
+</html>
