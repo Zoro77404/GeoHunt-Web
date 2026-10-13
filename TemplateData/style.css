@@ -151,9 +151,41 @@ html, body {
   text-align: center;
 }
 
-.gh-error .gh-bar { display: none; }
-.gh-error .gh-pin { animation: none; }
-.gh-error .gh-status { color: #C0392B; font-size: 18px; line-height: 1.4; }
+/* "Couldn't load — Retry" card: replaces the bar and status when something could not be downloaded. */
+.gh-error-card { display: none; flex-direction: column; align-items: center; margin-top: 28px; text-align: center; }
+.gh-error .gh-error-card { display: flex; }
+.gh-error .gh-bar, .gh-error .gh-status { display: none; }
+.gh-error .gh-pin, .gh-error .gh-pin-shadow { animation: none; }
+.gh-error-title {
+  font-family: "Fredoka", "Tajawal", system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 24px;
+  color: var(--ink);
+}
+.gh-error-hint {
+  margin-top: 8px;
+  font-family: "Fredoka", "Tajawal", system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.gh-retry {
+  margin-top: 22px;
+  min-width: 170px;
+  padding: 14px 30px;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #FFA35F 0%, var(--orange) 100%);
+  box-shadow: 0 5px 0 var(--orange-dark);
+  font-family: "Fredoka", "Tajawal", system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 20px;
+  color: #fff;
+  cursor: pointer;
+  -webkit-appearance: none;
+}
+.gh-retry:active { transform: translateY(3px); box-shadow: 0 2px 0 var(--orange-dark); }
+.gh-fatal .gh-error-title, .gh-fatal .gh-retry { display: none; }
 
 @keyframes gh-bounce {
   0%, 100% { transform: translateY(0); }

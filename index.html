@@ -3,6 +3,10 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <!-- GitHub Pages can't send headers: ask browsers not to keep this page (it is tiny; every other file has a unique name). -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <meta name="theme-color" content="#F6DDB0">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
@@ -11,7 +15,7 @@
     <link rel="icon" type="image/svg+xml" href="TemplateData/pin.svg">
     <link rel="apple-touch-icon" href="TemplateData/icon-180.png">
     <link rel="manifest" href="TemplateData/manifest.json">
-    <link rel="stylesheet" href="TemplateData/style.css">
+    <link rel="stylesheet" href="TemplateData/style.css?v=0.1.0-3">
   </head>
   <body>
     <div id="gh-stage">
@@ -24,69 +28,249 @@
           <div class="gh-subtitle">جيو هنت</div>
           <div class="gh-bar"><div class="gh-bar-fill" id="gh-bar-fill"></div></div>
           <div class="gh-status" id="gh-status"></div>
+          <div class="gh-error-card">
+            <div class="gh-error-title" id="gh-error-title"></div>
+            <div class="gh-error-hint" id="gh-error-hint"></div>
+            <button class="gh-retry" id="gh-retry" type="button"></button>
+          </div>
         </div>
       </div>
     </div>
     <script>
       (function () {
-        var arabic = /^ar\b/i.test(navigator.language || "");
+        // ---------- Texts (the game's last language, else the phone's) ----------
+        var lang = "";
+        try { lang = localStorage.getItem("geohunt-lang") || ""; } catch (e) { }
+        var arabic = lang ? lang === "ar" : /^ar\b/i.test(navigator.language || "");
         var text = arabic
-          ? { loading: "جار التحميل…", starting: "لحظات ونبدأ…", noWebGL: "متصفحك لا يدعم تشغيل اللعبة. جرب Safari أو Chrome بإصدار حديث.", failed: "تعذر تحميل اللعبة. تحقق من الاتصال ثم أعد تحميل الصفحة." }
-          : { loading: "Loading…", starting: "Almost there…", noWebGL: "This browser can't run the game. Try an up-to-date Safari or Chrome.", failed: "The game couldn't load. Check your connection and reload the page." };
+          ? { loading: "جار التحميل…", downloading: "جار التنزيل… {0}٪", starting: "نجهز اللعبة…", texts: "نجهز النصوص…", menu: "لحظات ونبدأ…",
+              failTitle: "تعذر التحميل", failNet: "تحقق من الاتصال بالإنترنت ثم حاول مرة ثانية.",
+              failMemory: "ذاكرة الجهاز لا تكفي الآن. أغلق التبويبات والتطبيقات الأخرى ثم حاول مرة ثانية.",
+              retry: "إعادة المحاولة", noWebGL: "متصفحك لا يدعم تشغيل اللعبة. جرب Safari أو Chrome بإصدار حديث." }
+          : { loading: "Loading…", downloading: "Downloading… {0}%", starting: "Starting the game…", texts: "Getting the texts ready…", menu: "Almost there…",
+              failTitle: "Couldn't load", failNet: "Check your internet connection, then try again.",
+              failMemory: "Your device is short on memory right now. Close other tabs and apps, then try again.",
+              retry: "Retry", noWebGL: "This browser can't run the game. Try an up-to-date Safari or Chrome." };
+        function digits(n) {
+          var s = String(n);
+          return arabic ? s.replace(/[0-9]/g, function (d) { return "٠١٢٣٤٥٦٧٨٩"[d]; }) : s;
+        }
+
         var status = document.getElementById("gh-status");
         var fill = document.getElementById("gh-bar-fill");
         var loader = document.getElementById("gh-loader");
-        if (arabic) { status.dir = "rtl"; }
+        if (arabic) { document.documentElement.lang = "ar"; loader.dir = "rtl"; }
         status.textContent = text.loading;
+        document.getElementById("gh-error-title").textContent = text.failTitle;
+        document.getElementById("gh-retry").textContent = text.retry;
+        document.getElementById("gh-retry").addEventListener("click", function () {
+          // A fresh page: build.json is fetched again, finished downloads come from the cache.
+          location.reload();
+        });
 
         // Never let the page scroll, bounce or zoom under the game.
         document.addEventListener("touchmove", function (e) { if (e.target && e.target.id === "unity-canvas") e.preventDefault(); }, { passive: false });
         document.addEventListener("gesturestart", function (e) { e.preventDefault(); });
         document.addEventListener("dblclick", function (e) { e.preventDefault(); });
 
-        function fail(message) {
-          loader.classList.add("gh-error");
-          status.textContent = message;
+        // ---------- Loading bar: 0-80% download, 80-85% start-up, 85-100% the game's own boot ----------
+        var shown = 0, failed = false, done = false;
+        function setBar(value, label) {
+          if (failed || done) return;
+          value = Math.max(shown, Math.min(1, value));
+          shown = value;
+          fill.style.width = (4 + 96 * value).toFixed(1) + "%";
+          if (label) status.textContent = label;
         }
 
-        var canvas = document.getElementById("unity-canvas");
-        var config = {
-          arguments: [],
-          dataUrl: "Build/WebGL.data.unityweb",
-          frameworkUrl: "Build/WebGL.framework.js.unityweb",
-          codeUrl: "Build/WebGL.wasm.unityweb",
-          streamingAssetsUrl: "StreamingAssets",
-          companyName: "DefaultCompany",
-          productName: "Geo Hunt",
-          productVersion: "0.1.0",
-          // Phones have 3x screens: drawing at 2x looks the same and runs much faster.
-          devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
-          showBanner: function (message, type) {
-            if (type === "error") fail(message);
-            else console.warn(message);
+        function fail(details) {
+          if (failed || done) return;
+          failed = true;
+          if (details) console.error("[Geo Hunt] Load failed:", details);
+          var memory = /memory|OOM|allocat|RangeError/i.test(String(details || ""));
+          document.getElementById("gh-error-hint").textContent = memory ? text.failMemory : text.failNet;
+          loader.classList.remove("gh-hidden");
+          loader.classList.add("gh-error");
+        }
+        window.addEventListener("unhandledrejection", function (e) {
+          if (!window.geoHuntInstance && e.reason && /out of memory|WebAssembly/i.test(String(e.reason))) fail(e.reason);
+        });
+
+        // Called by the game (GeoHuntWeb.jslib).
+        var bootWatchdog = 0;
+        function watch() {
+          clearTimeout(bootWatchdog);
+          // The game reports every step of its start-up; total silence this long means it got stuck.
+          bootWatchdog = setTimeout(function () { if (!done) fail("no start-up progress"); }, 150000);
+        }
+        window.GeoHuntPage = {
+          boot: function (progress, stage) {
+            watch();
+            setBar(0.85 + 0.15 * progress, stage === 2 ? text.menu : text.texts);
+          },
+          ready: function () {
+            setBar(1);
+            done = true;
+            clearTimeout(bootWatchdog);
+            loader.classList.add("gh-hidden");
+          },
+          fail: function () { fail("the game could not download what it needs"); }
+        };
+
+        // ---------- This build's files ----------
+        // build.json is fetched fresh every time, so even an old cached copy of this page starts the newest build.
+        // These are the same names, for when build.json can't be reached.
+        var build = {
+          loader: "Build/49d8b79ccd7527f2b9317183b96e88b0.loader.js",
+          data: "Build/7aeaf1f5b2766b5c787c0413d364eb9f.data",
+          framework: "Build/54f555d0607037f1e33b7aaf6b3c89e0.framework.js",
+          code: "Build/fa0cd6fe19c4b027bf6a40d83817c1bc.wasm",
+          streamingAssets: "StreamingAssets-5f7671c2636a",
+          bytes: 60479132
+        };
+
+        // ---------- Downloads that survive bad phone connections ----------
+        // Every request for the game's own files (Build/, StreamingAssets-…/) is retried on a network error or a server error.
+        // The data and framework files are read completely before Unity gets them, so a connection that drops halfway is
+        // retried too. Bytes are counted for the loading bar.
+        var nativeFetch = window.fetch.bind(window);
+        var received = 0;
+        function gameFile(url) { return /(^|\/)(Build\/|StreamingAssets)/.test(url) && url.indexOf("//") < 0 || url.indexOf(location.origin + "/") === 0 && /\/(Build\/|StreamingAssets)/.test(url); }
+        function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+        function readAll(response, count) {
+          var reader = response.body.getReader(), chunks = [], length = 0;
+          function pump() {
+            return reader.read().then(function (step) {
+              if (step.done) return;
+              chunks.push(step.value);
+              length += step.value.length;
+              if (count) count(step.value.length);
+              return pump();
+            });
           }
-        };
-
-        var probe = document.createElement("canvas");
-        if (!(probe.getContext("webgl2") || probe.getContext("webgl"))) { fail(text.noWebGL); return; }
-
-        var script = document.createElement("script");
-        script.src = "Build/WebGL.loader.js";
-        script.onload = function () {
-          createUnityInstance(canvas, config, function (progress) {
-            fill.style.width = Math.round(100 * Math.max(0.04, progress)) + "%";
-            if (progress >= 0.999) status.textContent = text.starting;
-          }).then(function (instance) {
-            window.geoHuntInstance = instance;
-            // The game hides the loading screen itself once the main menu is up (GeoHunt_HideLoader); this is only a safety net.
-            setTimeout(function () { loader.classList.add("gh-hidden"); }, 30000);
-          }).catch(function (message) {
-            console.error(message);
-            fail(text.failed);
+          return pump().then(function () {
+            var all = new Uint8Array(length), at = 0;
+            for (var i = 0; i < chunks.length; i++) { all.set(chunks[i], at); at += chunks[i].length; }
+            var headers = new Headers(response.headers);
+            headers.delete("Content-Encoding");
+            headers.set("Content-Length", String(length));
+            return new Response(all, { status: response.status, statusText: response.statusText, headers: headers });
           });
+        }
+        function counted(response, count) {
+          // Passes the body through untouched (the code still compiles while it downloads), counting bytes on the way.
+          if (!response.body || !window.ReadableStream) return response;
+          var reader = response.body.getReader();
+          var stream = new ReadableStream({
+            pull: function (controller) {
+              return reader.read().then(function (step) {
+                if (step.done) { controller.close(); return; }
+                count(step.value.length);
+                controller.enqueue(step.value);
+              });
+            },
+            cancel: function (reason) { return reader.cancel(reason); }
+          });
+          var headers = new Headers(response.headers);
+          headers.delete("Content-Encoding");
+          headers.delete("Content-Length");
+          return new Response(stream, { status: response.status, statusText: response.statusText, headers: headers });
+        }
+        window.fetch = function (input, init) {
+          var url = typeof input === "string" ? input : (input && input.url) || "";
+          var method = (init && init.method) || (input && input.method) || "GET";
+          if (method !== "GET" || !gameFile(url)) return nativeFetch(input, init);
+          var signal = init && init.signal;
+          var isBuild = /\/?Build\//.test(url);
+          var whole = isBuild && !/\.wasm(\?|$)/.test(url);
+          var tries = 0;
+          function attempt() {
+            tries++;
+            var got = 0;
+            var count = isBuild ? function (n) { got += n; received += n; } : null;
+            return nativeFetch(input, init).then(function (response) {
+              if (response.status >= 500 || response.status === 0) throw new Error("HTTP " + response.status);
+              if (response.status !== 200 || !response.body) return response;
+              if (whole) return readAll(response, count);
+              return count ? counted(response, count) : response;
+            }).catch(function (error) {
+              received -= got;
+              if ((signal && signal.aborted) || (error && error.name === "AbortError") || tries >= 5) throw error;
+              console.warn("[Geo Hunt] " + url + " failed (" + error + "), retry " + tries);
+              return wait(800 * Math.pow(2, tries - 1)).then(attempt);
+            });
+          }
+          return attempt();
         };
-        script.onerror = function () { fail(text.failed); };
-        document.body.appendChild(script);
+
+        // ---------- Start ----------
+        var canvas = document.getElementById("unity-canvas");
+        var probe = document.createElement("canvas");
+        if (!(probe.getContext("webgl2") || probe.getContext("webgl"))) {
+          failed = true;
+          loader.classList.add("gh-error", "gh-fatal");
+          document.getElementById("gh-error-hint").textContent = text.noWebGL;
+          return;
+        }
+
+        function start() {
+          var unityProgress = 0;
+          var ticker = setInterval(function () {
+            var downloaded = build.bytes > 0 ? received / build.bytes : 0;
+            var p = Math.max(downloaded, unityProgress);
+            if (p < 0.999) setBar(0.8 * p, p > 0.01 ? text.downloading.replace("{0}", digits(Math.round(100 * p))) : text.loading);
+            else setBar(0.82, text.starting);
+          }, 200);
+
+          var config = {
+            arguments: [],
+            dataUrl: build.data,
+            frameworkUrl: build.framework,
+            codeUrl: build.code,
+            streamingAssetsUrl: build.streamingAssets,
+            companyName: "DefaultCompany",
+            productName: "Geo Hunt",
+            productVersion: "0.1.0",
+            // Every file has a unique name per build, so the browser cache may keep and reuse it without asking the server.
+            cacheControl: function (url) { return /\/?(Build\/|StreamingAssets-)/.test(url) ? "immutable" : "no-store"; },
+            // Phones have 3x screens: drawing at 2x looks the same and runs much faster.
+            devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+            showBanner: function (message, type) {
+              if (type === "error") fail(message);
+              else console.warn(message);
+            }
+          };
+
+          var script = document.createElement("script");
+          script.src = build.loader;
+          script.onload = function () {
+            createUnityInstance(canvas, config, function (progress) {
+              unityProgress = progress;
+            }).then(function (instance) {
+              clearInterval(ticker);
+              window.geoHuntInstance = instance;
+              setBar(0.85, text.texts);
+              watch();
+            }).catch(function (message) {
+              clearInterval(ticker);
+              fail(message);
+            });
+          };
+          script.onerror = function () { clearInterval(ticker); fail("loader script"); };
+          document.body.appendChild(script);
+        }
+
+        var settled = false;
+        function go(fresh) {
+          if (settled) return;
+          settled = true;
+          if (fresh && fresh.loader && fresh.data && fresh.framework && fresh.code) build = fresh;
+          start();
+        }
+        setTimeout(function () { go(null); }, 6000);
+        nativeFetch("build.json?t=" + Date.now(), { cache: "no-store" })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(go, function () { go(null); });
       })();
     </script>
   </body>
