@@ -1,9 +1,9 @@
 {
-  "loader": "Build/49d8b79ccd7527f2b9317183b96e88b0.loader.js",
-  "data": "Build/7aeaf1f5b2766b5c787c0413d364eb9f.data",
+  "loader": "Build/b759085159d6a7672077725e793fee77.loader.js",
+  "data": "Build/bdc24dfb4c84e1b4b599533dbbeaa9c1.data",
   "framework": "Build/54f555d0607037f1e33b7aaf6b3c89e0.framework.js",
-  "code": "Build/fa0cd6fe19c4b027bf6a40d83817c1bc.wasm",
-  "streamingAssets": "StreamingAssets-5f7671c2636a",
-  "bytes": 60479132,
-  "built": "2026-10-13T16:15:33Z"
+  "code": "Build/af555af9f899d797d5673df8debd7d00.wasm",
+  "streamingAssets": "StreamingAssets-c012c876fab3",
+  "bytes": 61695613,
+  "built": "2026-10-14T18:04:20Z"
 }
